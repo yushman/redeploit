@@ -1,0 +1,15 @@
+settings:
+  temp: true
+download:
+  url: https://google.com
+  token: aksjhdkajsdh
+upload:
+  url: https://google.com
+  token: aksjhdkajsdh
+artifacts:
+  - group_id: group.mygroup.mygroup
+    artifact_id: artifact
+    version: 1.0.1
+  - group_id: group1.mygroup.gggg
+    artifact_id: artifact1
+    version: 1.0.0
