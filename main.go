@@ -93,9 +93,6 @@ func downloadArtifact(client *http.Client, config Config, artifact Artifact) err
 
 	err := downloadFile(client, authHeader, jarUrl, jarFile, config.Settings.DebugDownload)
 	err = downloadFile(client, authHeader, aarUrl, aarFile, config.Settings.DebugDownload)
-	if err != nil {
-		return err
-	}
 	err = downloadFile(client, authHeader, pomUrl, pomFile, config.Settings.DebugDownload)
 	return err
 }
@@ -167,9 +164,6 @@ func uploadArtifacts(client *http.Client, config Config, artifact Artifact) erro
 
 	err := uploadFile(client, authHeader, jarUrl, jarFile, method, config.Settings.DebugUpload)
 	err = uploadFile(client, authHeader, aarUrl, aarFile, method, config.Settings.DebugUpload)
-	if err != nil {
-		return err
-	}
 	err = uploadFile(client, authHeader, pomUrl, pomFile, method, config.Settings.DebugUpload)
 	return err
 }
