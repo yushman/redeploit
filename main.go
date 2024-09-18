@@ -22,9 +22,10 @@ type Config struct {
 }
 
 type Settings struct {
-	Temp          bool `yaml:"temp"`
-	DebugDownload bool `yaml:"debug_download"`
-	DebugUpload   bool `yaml:"debug_upload"`
+	SaveArtifacts bool   `yaml:"save_artifacts"`
+	DebugDownload bool   `yaml:"debug_download"`
+	DebugUpload   bool   `yaml:"debug_upload"`
+	UploadMethod  string `yaml:"upload_method"`
 }
 
 type Endpoint struct {
@@ -70,31 +71,42 @@ func getAuthHeader(endpoint Endpoint) *AuthHeader {
 	return authHeader
 }
 
-func downloadArtifact(client *http.Client, download Endpoint, artifact Artifact) error {
+func downloadArtifact(client *http.Client, config Config, artifact Artifact) error {
 	// Create the file
+	download := config.Download
 
-	baseUrl := download.Url + "/" + strings.Join(strings.Split(artifact.GroupId, "."), "/") + "/" + artifact.ArtifactId
+	baseUrl := strings.Trim(download.Url, "/") + "/" + strings.Join(strings.Split(artifact.GroupId, "."), "/") + "/" + artifact.ArtifactId + "/" + artifact.Version
 	jarUrl := baseUrl + "/" + artifact.ArtifactId + "-" + artifact.Version + ".jar"
 	aarUrl := baseUrl + "/" + artifact.ArtifactId + "-" + artifact.Version + ".aar"
 	pomUrl := baseUrl + "/" + artifact.ArtifactId + "-" + artifact.Version + ".pom"
 
-	jarFile := "temp/" + artifact.ArtifactId + "-" + artifact.Version + ".jar"
-	aarFile := "temp/" + artifact.ArtifactId + "-" + artifact.Version + ".aar"
-	pomFile := "temp/" + artifact.ArtifactId + "-" + artifact.Version + ".pom"
+	var dir = "temp/"
+	if config.Settings.SaveArtifacts {
+		dir = "artifacts/"
+	}
+
+	jarFile := dir + artifact.ArtifactId + "-" + artifact.Version + ".jar"
+	aarFile := dir + artifact.ArtifactId + "-" + artifact.Version + ".aar"
+	pomFile := dir + artifact.ArtifactId + "-" + artifact.Version + ".pom"
 
 	authHeader := getAuthHeader(download)
 
-	err := downloadFile(client, authHeader, jarUrl, jarFile)
-	err = downloadFile(client, authHeader, aarUrl, aarFile)
+	err := downloadFile(client, authHeader, jarUrl, jarFile, config.Settings.DebugDownload)
+	err = downloadFile(client, authHeader, aarUrl, aarFile, config.Settings.DebugDownload)
 	if err != nil {
 		return err
 	}
-	err = downloadFile(client, authHeader, pomUrl, pomFile)
+	err = downloadFile(client, authHeader, pomUrl, pomFile, config.Settings.DebugDownload)
 	return err
 }
 
-func downloadFile(client *http.Client, header *AuthHeader, url string, filePath string) error {
-	fmt.Printf("Downloading file %s\n", filePath)
+func downloadFile(client *http.Client, header *AuthHeader, url string, filePath string, debugMode bool) error {
+	fmt.Printf("Downloading file from %s to %s\n", url, filePath)
+
+	if debugMode {
+		return nil
+	}
+
 	os.Remove(filePath)
 
 	req, err := http.NewRequest("GET", url, nil)
@@ -129,28 +141,46 @@ func downloadFile(client *http.Client, header *AuthHeader, url string, filePath 
 	return err
 }
 
-func uploadArtifacts(client *http.Client, upload Endpoint, artifact Artifact) error {
-	baseUrl := upload.Url + "/" + strings.Join(strings.Split(artifact.GroupId, "."), "/") + "/" + artifact.ArtifactId
+func uploadArtifacts(client *http.Client, config Config, artifact Artifact) error {
+	upload := config.Upload
+
+	baseUrl := strings.Trim(upload.Url, "/") + "/" + strings.Join(strings.Split(artifact.GroupId, "."), "/") + "/" + artifact.ArtifactId + "/" + artifact.Version
 	jarUrl := baseUrl + "/" + artifact.ArtifactId + "-" + artifact.Version + ".jar"
 	aarUrl := baseUrl + "/" + artifact.ArtifactId + "-" + artifact.Version + ".aar"
 	pomUrl := baseUrl + "/" + artifact.ArtifactId + "-" + artifact.Version + ".pom"
 
-	jarFile := "temp/" + artifact.ArtifactId + "-" + artifact.Version + ".jar"
-	aarFile := "temp/" + artifact.ArtifactId + "-" + artifact.Version + ".aar"
-	pomFile := "temp/" + artifact.ArtifactId + "-" + artifact.Version + ".pom"
+	var dir = "temp/"
+	if config.Settings.SaveArtifacts {
+		dir = "artifacts/"
+	}
+
+	jarFile := dir + artifact.ArtifactId + "-" + artifact.Version + ".jar"
+	aarFile := dir + artifact.ArtifactId + "-" + artifact.Version + ".aar"
+	pomFile := dir + artifact.ArtifactId + "-" + artifact.Version + ".pom"
 
 	authHeader := getAuthHeader(upload)
 
-	err := uploadFile(client, authHeader, jarUrl, jarFile)
-	err = uploadFile(client, authHeader, aarUrl, aarFile)
+	var method = "POST"
+	if config.Settings.UploadMethod == "PUT" {
+		method = "PUT"
+	}
+
+	err := uploadFile(client, authHeader, jarUrl, jarFile, method, config.Settings.DebugUpload)
+	err = uploadFile(client, authHeader, aarUrl, aarFile, method, config.Settings.DebugUpload)
 	if err != nil {
 		return err
 	}
-	err = uploadFile(client, authHeader, pomUrl, pomFile)
+	err = uploadFile(client, authHeader, pomUrl, pomFile, method, config.Settings.DebugUpload)
 	return err
 }
 
-func uploadFile(client *http.Client, header *AuthHeader, url string, filePath string) error {
+func uploadFile(client *http.Client, header *AuthHeader, url string, filePath string, method string, debugMode bool) error {
+	fmt.Printf("Uploading file from %s to %s\n", filePath, url)
+
+	if debugMode {
+		return nil
+	}
+
 	// Open the file
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -181,7 +211,7 @@ func uploadFile(client *http.Client, header *AuthHeader, url string, filePath st
 	}
 
 	// Send the POST request to upload the file
-	req, err := http.NewRequest("POST", url, &b)
+	req, err := http.NewRequest(method, url, &b)
 	if err != nil {
 		return err
 	}
@@ -231,16 +261,20 @@ func main() {
 	// Create an HTTP client
 	client := &http.Client{}
 
-	os.MkdirAll("temp", os.ModePerm)
-	defer os.RemoveAll("temp")
+	if config.Settings.SaveArtifacts {
+		os.MkdirAll("artifacts", os.ModePerm)
+	} else {
+		os.MkdirAll("temp", os.ModePerm)
+		defer os.RemoveAll("temp")
+	}
 
 	for _, a := range config.Artifacts {
-		err := downloadArtifact(client, config.Download, a)
+		err := downloadArtifact(client, config, a)
 		if err != nil {
 			log.Printf("error downloading artifact %s: %v\n", a.ArtifactId, err)
 			continue
 		}
-		err = uploadArtifacts(client, config.Upload, a)
+		err = uploadArtifacts(client, config, a)
 		if err != nil {
 			log.Printf("error uploading artifact %s: %v\n", a.ArtifactId, err)
 			continue

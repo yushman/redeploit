@@ -1,15 +1,12 @@
 settings:
-  temp: true
+  save_artifacts: true
+  upload_method: "PUT"
 download:
-  url: https://google.com
-  token: aksjhdkajsdh
+  url: https://repo1.maven.org/maven2/
 upload:
-  url: https://google.com
+  url: https://nexus.mynexus.com/
   token: aksjhdkajsdh
 artifacts:
-  - group_id: group.mygroup.mygroup
-    artifact_id: artifact
-    version: 1.0.1
-  - group_id: group1.mygroup.gggg
-    artifact_id: artifact1
-    version: 1.0.0
+  - group_id: com.github.bumptech.glide
+    artifact_id: glide
+    version: 4.15.0
