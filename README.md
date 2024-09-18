@@ -19,7 +19,7 @@ Run the following command
 ```sh
 # Go installed
 go run . config.yaml
-# Go not installed, artifact downloaded
+# Go not installed, download Artifact and run
 ./redeploit config.yaml
 ```
 
