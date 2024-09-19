@@ -1,0 +1,11 @@
+settings:
+  save_artifacts: false
+download:
+  url: https://repo1.maven.org/maven2/
+upload:
+  url: https://nexus.mynexus.com/
+  token: mytoken
+artifacts:
+  - group_id: com.github.bumptech.glide
+    artifact_id: glide
+    version: 4.16.0

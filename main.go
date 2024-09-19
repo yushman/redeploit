@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v2"
@@ -71,30 +72,103 @@ func getAuthHeader(endpoint Endpoint) *AuthHeader {
 	return authHeader
 }
 
-func downloadArtifact(client *http.Client, config Config, artifact Artifact) error {
-	// Create the file
-	download := config.Download
-
-	baseUrl := strings.Trim(download.Url, "/") + "/" + strings.Join(strings.Split(artifact.GroupId, "."), "/") + "/" + artifact.ArtifactId + "/" + artifact.Version
-	jarUrl := baseUrl + "/" + artifact.ArtifactId + "-" + artifact.Version + ".jar"
-	aarUrl := baseUrl + "/" + artifact.ArtifactId + "-" + artifact.Version + ".aar"
-	pomUrl := baseUrl + "/" + artifact.ArtifactId + "-" + artifact.Version + ".pom"
-
+func getDir(settings Settings) string {
 	var dir = "temp/"
-	if config.Settings.SaveArtifacts {
+	if settings.SaveArtifacts {
 		dir = "artifacts/"
 	}
+	return dir
+}
 
-	jarFile := dir + artifact.ArtifactId + "-" + artifact.Version + ".jar"
-	aarFile := dir + artifact.ArtifactId + "-" + artifact.Version + ".aar"
-	pomFile := dir + artifact.ArtifactId + "-" + artifact.Version + ".pom"
+func downloadArtifact(client *http.Client, config Config, artifact Artifact) ([]string, error) {
+	// Create the file
+	download := config.Download
+	var links []string
 
-	authHeader := getAuthHeader(download)
+	baseUrl := strings.Trim(download.Url, "/") + "/" + strings.Join(strings.Split(artifact.GroupId, "."), "/") + "/" + artifact.ArtifactId + "/" + artifact.Version
 
-	err := downloadFile(client, authHeader, jarUrl, jarFile, config.Settings.DebugDownload)
-	err = downloadFile(client, authHeader, aarUrl, aarFile, config.Settings.DebugDownload)
-	err = downloadFile(client, authHeader, pomUrl, pomFile, config.Settings.DebugDownload)
-	return err
+	fmt.Printf("Downloading artifact from %s\n", baseUrl)
+
+	// Regex pattern to find all href links
+	pattern := "href=[\"']([^\"']+)[\"']"
+
+	// Compile the regex
+	re := regexp.MustCompile(pattern)
+
+	req, err := http.NewRequest("GET", baseUrl, nil)
+	if err != nil {
+		return links, err
+	}
+
+	header := getAuthHeader(download)
+	if header != nil {
+		req.Header.Add(header.key, header.value)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return links, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+
+	html := string(body)
+
+	// Find all matches
+	matches := re.FindAllStringSubmatch(html, -1)
+
+	// Extract and print the links
+	for _, match := range matches {
+		if len(match) > 1 {
+			links = append(links, match[1]) // match[1] contains the captured URL
+		}
+	}
+
+	if config.Settings.DebugDownload {
+		fmt.Println(html)
+		fmt.Println("Extracted links:")
+		for _, link := range links {
+			fmt.Println(link)
+		}
+	}
+
+	dir := getDir(config.Settings)
+
+	for _, link := range links {
+		if !strings.Contains(link, "..") {
+			url := baseUrl + "/" + link
+			file := dir + link
+			err = downloadFile(client, header, url, file, config.Settings.DebugDownload)
+		}
+	}
+
+	if err != nil {
+		jarUrl := baseUrl + "/" + artifact.ArtifactId + "-" + artifact.Version + ".jar"
+		aarUrl := baseUrl + "/" + artifact.ArtifactId + "-" + artifact.Version + ".aar"
+		pomUrl := baseUrl + "/" + artifact.ArtifactId + "-" + artifact.Version + ".pom"
+
+		jarFile := artifact.ArtifactId + "-" + artifact.Version + ".jar"
+		aarFile := artifact.ArtifactId + "-" + artifact.Version + ".aar"
+		pomFile := artifact.ArtifactId + "-" + artifact.Version + ".pom"
+
+		err = downloadFile(client, header, jarUrl, dir+jarFile, config.Settings.DebugDownload)
+		if err != nil {
+			links = append(links, jarFile)
+		}
+		err = downloadFile(client, header, aarUrl, dir+aarFile, config.Settings.DebugDownload)
+		if err != nil {
+			links = append(links, aarFile)
+		}
+		err = downloadFile(client, header, pomUrl, dir+pomFile, config.Settings.DebugDownload)
+		if err != nil {
+			links = append(links, pomFile)
+		}
+		return links, err
+
+	}
+
+	return links, err
 }
 
 func downloadFile(client *http.Client, header *AuthHeader, url string, filePath string, debugMode bool) error {
@@ -135,25 +209,21 @@ func downloadFile(client *http.Client, header *AuthHeader, url string, filePath 
 
 	// Write the body to file
 	_, err = io.Copy(out, resp.Body)
+	if err == nil {
+		fmt.Println("Success")
+	}
 	return err
 }
 
-func uploadArtifacts(client *http.Client, config Config, artifact Artifact) error {
+func uploadArtifacts(client *http.Client, config Config, artifact Artifact, files []string) error {
 	upload := config.Upload
 
 	baseUrl := strings.Trim(upload.Url, "/") + "/" + strings.Join(strings.Split(artifact.GroupId, "."), "/") + "/" + artifact.ArtifactId + "/" + artifact.Version
-	jarUrl := baseUrl + "/" + artifact.ArtifactId + "-" + artifact.Version + ".jar"
-	aarUrl := baseUrl + "/" + artifact.ArtifactId + "-" + artifact.Version + ".aar"
-	pomUrl := baseUrl + "/" + artifact.ArtifactId + "-" + artifact.Version + ".pom"
+	fmt.Printf("Uploading artifacts to %s\n", baseUrl)
 
-	var dir = "temp/"
-	if config.Settings.SaveArtifacts {
-		dir = "artifacts/"
-	}
+	dir := getDir(config.Settings)
 
-	jarFile := dir + artifact.ArtifactId + "-" + artifact.Version + ".jar"
-	aarFile := dir + artifact.ArtifactId + "-" + artifact.Version + ".aar"
-	pomFile := dir + artifact.ArtifactId + "-" + artifact.Version + ".pom"
+	var err error
 
 	authHeader := getAuthHeader(upload)
 
@@ -162,9 +232,14 @@ func uploadArtifacts(client *http.Client, config Config, artifact Artifact) erro
 		method = "PUT"
 	}
 
-	err := uploadFile(client, authHeader, jarUrl, jarFile, method, config.Settings.DebugUpload)
-	err = uploadFile(client, authHeader, aarUrl, aarFile, method, config.Settings.DebugUpload)
-	err = uploadFile(client, authHeader, pomUrl, pomFile, method, config.Settings.DebugUpload)
+	for _, file := range files {
+		url := baseUrl + "/" + file
+		filePath := dir + file
+		err = uploadFile(client, authHeader, url, filePath, method, config.Settings.DebugUpload)
+		if err != nil {
+			fmt.Printf("Error uploading file %s\n    to %s\n    caused by %v\n", filePath, url, err)
+		}
+	}
 	return err
 }
 
@@ -263,12 +338,12 @@ func main() {
 	}
 
 	for _, a := range config.Artifacts {
-		err := downloadArtifact(client, config, a)
+		files, err := downloadArtifact(client, config, a)
 		if err != nil {
 			log.Printf("error downloading artifact %s: %v\n", a.ArtifactId, err)
 			continue
 		}
-		err = uploadArtifacts(client, config, a)
+		err = uploadArtifacts(client, config, a, files)
 		if err != nil {
 			log.Printf("error uploading artifact %s: %v\n", a.ArtifactId, err)
 			continue
