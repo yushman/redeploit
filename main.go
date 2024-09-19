@@ -121,7 +121,10 @@ func downloadArtifact(client *http.Client, config Config, artifact Artifact) ([]
 	// Extract and print the links
 	for _, match := range matches {
 		if len(match) > 1 {
-			links = append(links, match[1]) // match[1] contains the captured URL
+			link := match[1]
+			if strings.Contains(link, ".jar") || strings.Contains(link, ".aar") || strings.Contains(link, ".pom") {
+				links = append(links, link) // match[1] contains the captured URL
+			}
 		}
 	}
 
@@ -136,11 +139,9 @@ func downloadArtifact(client *http.Client, config Config, artifact Artifact) ([]
 	dir := getDir(config.Settings)
 
 	for _, link := range links {
-		if !strings.Contains(link, "..") {
-			url := baseUrl + "/" + link
-			file := dir + link
-			err = downloadFile(client, header, url, file, config.Settings.DebugDownload)
-		}
+		url := baseUrl + "/" + link
+		file := dir + link
+		err = downloadFile(client, header, url, file, config.Settings.DebugDownload)
 	}
 
 	if err != nil {
