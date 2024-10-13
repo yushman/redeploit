@@ -1,6 +1,6 @@
 settings:
-  save_artifacts: false
-  download_path: ~/somewhere
+  artifacts_path: /home/user/.m2
+  debug_upload: true
 download:
   url: https://repo1.maven.org/maven2/
 upload:

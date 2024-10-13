@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -24,11 +25,12 @@ type Config struct {
 }
 
 type Settings struct {
-	SaveArtifacts bool   `yaml:"save_artifacts"`
 	DebugDownload bool   `yaml:"debug_download"`
 	DebugUpload   bool   `yaml:"debug_upload"`
 	UploadMethod  string `yaml:"upload_method"`
-	DownloadPath  string `yaml:"download_path"`
+	ArtifactsPath string `yaml:"artifacts_path"`
+	SkipSources   bool   `yaml:"skip_sources"`
+	SkipJavaDocs  bool   `yaml:"skip_javadocs"`
 }
 
 type Endpoint struct {
@@ -75,12 +77,9 @@ func getAuthHeader(endpoint Endpoint) *AuthHeader {
 }
 
 func getDir(settings Settings) string {
-	var dir = "temp/"
-	if settings.SaveArtifacts {
-		dir = "artifacts/"
-	}
-	if settings.DownloadPath != "" {
-		dir = settings.DownloadPath
+	var dir = "temp"
+	if settings.ArtifactsPath != "" {
+		dir = strings.TrimRight(settings.ArtifactsPath, "/")
 	}
 	return dir
 }
@@ -90,10 +89,13 @@ func downloadArtifact(client *http.Client, config Config, artifact Artifact) ([]
 	download := config.Download
 	var links []string
 
-	baseUrl := strings.Trim(download.Url, "/") + "/" + strings.Join(strings.Split(artifact.GroupId, "."), "/") + "/" + artifact.ArtifactId + "/" + artifact.Version + "/"
+	artifactPath := strings.Join(strings.Split(artifact.GroupId, "."), "/") + "/" + artifact.ArtifactId + "/" + artifact.Version + "/"
+
+	baseUrl := strings.Trim(download.Url, "/") + "/" + artifactPath
 
 	fmt.Printf("Downloading artifact from %s\n", baseUrl)
 
+	// Try to extract all links from html (some repositories support this)
 	// Regex pattern to find all href links
 	pattern := "href=[\"']([^\"']+)[\"']"
 
@@ -127,7 +129,12 @@ func downloadArtifact(client *http.Client, config Config, artifact Artifact) ([]
 	for _, match := range matches {
 		if len(match) > 1 {
 			link := match[1]
-			if strings.Contains(link, ".jar") || strings.Contains(link, ".aar") || strings.Contains(link, ".pom") {
+			// Check if the link is a valid file
+			if strings.Contains(link, ".jar") ||
+				strings.Contains(link, ".aar") ||
+				strings.Contains(link, ".pom") ||
+				(!config.Settings.SkipSources && strings.Contains(link, "-sources.jar")) ||
+				(!config.Settings.SkipJavaDocs && strings.Contains(link, "-javadoc.jar")) {
 				links = append(links, link) // match[1] contains the captured URL
 			}
 		}
@@ -141,35 +148,61 @@ func downloadArtifact(client *http.Client, config Config, artifact Artifact) ([]
 		}
 	}
 
-	dir := getDir(config.Settings)
+	dir := getDir(config.Settings) + "/"
 
 	for _, link := range links {
 		url := baseUrl + link
-		file := dir + link
+		file := dir + artifactPath + link
 		err = downloadFile(client, header, url, file, config.Settings.DebugDownload)
 	}
 
-	if err != nil || len(links) == 0 {
+	// If no links were found, try to download known file formats - jar, aar, pom, etc...
+	if len(links) == 0 {
 		jarUrl := baseUrl + artifact.ArtifactId + "-" + artifact.Version + ".jar"
 		aarUrl := baseUrl + artifact.ArtifactId + "-" + artifact.Version + ".aar"
 		pomUrl := baseUrl + artifact.ArtifactId + "-" + artifact.Version + ".pom"
 
-		jarFile := artifact.ArtifactId + "-" + artifact.Version + ".jar"
-		aarFile := artifact.ArtifactId + "-" + artifact.Version + ".aar"
-		pomFile := artifact.ArtifactId + "-" + artifact.Version + ".pom"
+		jarFile := dir + artifactPath + artifact.ArtifactId + "-" + artifact.Version + ".jar"
+		aarFile := dir + artifactPath + artifact.ArtifactId + "-" + artifact.Version + ".aar"
+		pomFile := dir + artifactPath + artifact.ArtifactId + "-" + artifact.Version + ".pom"
 
-		err = downloadFile(client, header, jarUrl, dir+jarFile, config.Settings.DebugDownload)
+		links = append(links, jarFile)
+		links = append(links, aarFile)
+		links = append(links, pomFile)
+
+		err = downloadFile(client, header, jarUrl, jarFile, config.Settings.DebugDownload)
 		if err != nil {
-			links = append(links, jarFile)
+			fmt.Println("No jar downloaded")
 		}
-		err = downloadFile(client, header, aarUrl, dir+aarFile, config.Settings.DebugDownload)
+		err = downloadFile(client, header, aarUrl, aarFile, config.Settings.DebugDownload)
 		if err != nil {
-			links = append(links, aarFile)
+			fmt.Println("No aar downloaded")
 		}
-		err = downloadFile(client, header, pomUrl, dir+pomFile, config.Settings.DebugDownload)
+		err = downloadFile(client, header, pomUrl, pomFile, config.Settings.DebugDownload)
 		if err != nil {
-			links = append(links, pomFile)
+			fmt.Println("No pom downloaded")
 		}
+
+		if !config.Settings.SkipSources {
+			sourcesUrl := baseUrl + artifact.ArtifactId + "-" + artifact.Version + "-sources.jar"
+			sourcesFile := dir + "/" + artifactPath + artifact.ArtifactId + "-" + artifact.Version + "-sources.jar"
+			links = append(links, sourcesFile)
+			err = downloadFile(client, header, sourcesUrl, sourcesFile, config.Settings.DebugDownload)
+			if err != nil {
+				fmt.Println("No sources downloaded")
+			}
+		}
+
+		if !config.Settings.SkipSources {
+			javadocUrl := baseUrl + artifact.ArtifactId + "-" + artifact.Version + "-javadoc.jar"
+			javadocFile := dir + "/" + artifactPath + artifact.ArtifactId + "-" + artifact.Version + "-javadoc.jar"
+			links = append(links, javadocFile)
+			err = downloadFile(client, header, javadocUrl, javadocFile, config.Settings.DebugDownload)
+			if err != nil {
+				fmt.Println("No javadocs downloaded")
+			}
+		}
+
 		return links, err
 
 	}
@@ -209,9 +242,15 @@ func downloadFile(client *http.Client, header *AuthHeader, url string, filePath 
 	}
 	defer resp.Body.Close()
 
-	out, err := os.Create(filePath)
+	err = os.MkdirAll(filepath.Dir(filePath), os.ModePerm)
+
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create directory: %v", err)
+	}
+
+	out, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE, 0666)
+	if err != nil {
+		return fmt.Errorf("failed to create file: %v", err)
 	}
 	defer out.Close()
 
@@ -369,10 +408,12 @@ func main() {
 		log.Fatalf("error: %v", err)
 	}
 	if !pathExists {
-		os.MkdirAll("artifacts", os.ModePerm)
+		os.MkdirAll(path, os.ModePerm)
 	}
-	if !config.Settings.SaveArtifacts {
-		defer os.RemoveAll("temp")
+
+	if config.Settings.ArtifactsPath == "" {
+		// if no need to save artifacts - remove temp directory
+		defer os.RemoveAll(path)
 	}
 
 	// Download and upload artifacts
