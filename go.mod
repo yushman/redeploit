@@ -1,4 +1,4 @@
-module org.github.yushman/redeploit
+module github.com/yushman/redeploit
 
 go 1.21
 
