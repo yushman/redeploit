@@ -8,6 +8,7 @@ import (
 	"log"
 	"mime/multipart"
 	"net/http"
+	"net/http/httputil"
 	"os"
 	"regexp"
 	"strings"
@@ -27,6 +28,7 @@ type Settings struct {
 	DebugDownload bool   `yaml:"debug_download"`
 	DebugUpload   bool   `yaml:"debug_upload"`
 	UploadMethod  string `yaml:"upload_method"`
+	DownloadPath  string `yaml:"download_path"`
 }
 
 type Endpoint struct {
@@ -55,7 +57,7 @@ func getAuthHeader(endpoint Endpoint) *AuthHeader {
 		encoded := base64.StdEncoding.EncodeToString([]byte(data))
 		authHeader = &AuthHeader{
 			"Authorization",
-			encoded,
+			"Basic " + encoded,
 		}
 	} else if endpoint.Token != "" {
 		authHeader = &AuthHeader{
@@ -77,6 +79,9 @@ func getDir(settings Settings) string {
 	if settings.SaveArtifacts {
 		dir = "artifacts/"
 	}
+	if settings.DownloadPath != "" {
+		dir = settings.DownloadPath
+	}
 	return dir
 }
 
@@ -85,7 +90,7 @@ func downloadArtifact(client *http.Client, config Config, artifact Artifact) ([]
 	download := config.Download
 	var links []string
 
-	baseUrl := strings.Trim(download.Url, "/") + "/" + strings.Join(strings.Split(artifact.GroupId, "."), "/") + "/" + artifact.ArtifactId + "/" + artifact.Version
+	baseUrl := strings.Trim(download.Url, "/") + "/" + strings.Join(strings.Split(artifact.GroupId, "."), "/") + "/" + artifact.ArtifactId + "/" + artifact.Version + "/"
 
 	fmt.Printf("Downloading artifact from %s\n", baseUrl)
 
@@ -102,7 +107,7 @@ func downloadArtifact(client *http.Client, config Config, artifact Artifact) ([]
 
 	header := getAuthHeader(download)
 	if header != nil {
-		req.Header.Add(header.key, header.value)
+		req.Header[header.key] = []string{header.value}
 	}
 
 	resp, err := client.Do(req)
@@ -139,15 +144,15 @@ func downloadArtifact(client *http.Client, config Config, artifact Artifact) ([]
 	dir := getDir(config.Settings)
 
 	for _, link := range links {
-		url := baseUrl + "/" + link
+		url := baseUrl + link
 		file := dir + link
 		err = downloadFile(client, header, url, file, config.Settings.DebugDownload)
 	}
 
-	if err != nil {
-		jarUrl := baseUrl + "/" + artifact.ArtifactId + "-" + artifact.Version + ".jar"
-		aarUrl := baseUrl + "/" + artifact.ArtifactId + "-" + artifact.Version + ".aar"
-		pomUrl := baseUrl + "/" + artifact.ArtifactId + "-" + artifact.Version + ".pom"
+	if err != nil || len(links) == 0 {
+		jarUrl := baseUrl + artifact.ArtifactId + "-" + artifact.Version + ".jar"
+		aarUrl := baseUrl + artifact.ArtifactId + "-" + artifact.Version + ".aar"
+		pomUrl := baseUrl + artifact.ArtifactId + "-" + artifact.Version + ".pom"
 
 		jarFile := artifact.ArtifactId + "-" + artifact.Version + ".jar"
 		aarFile := artifact.ArtifactId + "-" + artifact.Version + ".aar"
@@ -187,8 +192,15 @@ func downloadFile(client *http.Client, header *AuthHeader, url string, filePath 
 	}
 
 	if header != nil {
-		req.Header.Add(header.key, header.value)
+		req.Header[header.key] = []string{header.value}
 	}
+
+	d, err := httputil.DumpRequest(req, true)
+	if err != nil {
+		return nil
+	}
+
+	fmt.Printf("Download request: %q\n", d)
 
 	// Get the response from the URL
 	resp, err := client.Do(req)
@@ -287,8 +299,15 @@ func uploadFile(client *http.Client, header *AuthHeader, url string, filePath st
 	}
 
 	if header != nil {
-		req.Header.Add(header.key, header.value)
+		req.Header[header.key] = []string{header.value}
 	}
+
+	d, err := httputil.DumpRequest(req, true)
+	if err != nil {
+		return nil
+	}
+
+	fmt.Printf("Upload request: %q\n", d)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -301,6 +320,17 @@ func uploadFile(client *http.Client, header *AuthHeader, url string, filePath st
 	fmt.Println(string(responseBody))
 
 	return nil
+}
+
+func exists(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
 }
 
 func main() {
@@ -331,13 +361,21 @@ func main() {
 	// Create an HTTP client
 	client := &http.Client{}
 
-	if config.Settings.SaveArtifacts {
+	// Make directories
+	path := getDir(config.Settings)
+	pathExists, err := exists(path)
+
+	if err != nil {
+		log.Fatalf("error: %v", err)
+	}
+	if !pathExists {
 		os.MkdirAll("artifacts", os.ModePerm)
-	} else {
-		os.MkdirAll("temp", os.ModePerm)
+	}
+	if !config.Settings.SaveArtifacts {
 		defer os.RemoveAll("temp")
 	}
 
+	// Download and upload artifacts
 	for _, a := range config.Artifacts {
 		files, err := downloadArtifact(client, config, a)
 		if err != nil {

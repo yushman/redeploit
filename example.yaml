@@ -1,5 +1,6 @@
 settings:
   save_artifacts: false
+  download_path: ~/somewhere
 download:
   url: https://repo1.maven.org/maven2/
 upload:
